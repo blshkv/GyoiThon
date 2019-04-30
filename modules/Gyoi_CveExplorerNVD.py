@@ -8,6 +8,7 @@ import json
 import glob
 import zipfile
 import shutil
+import ssl
 import urllib3
 import configparser
 import pandas as pd
@@ -33,6 +34,7 @@ class CveExplorerNVD:
         config.read(os.path.join(self.root_path, 'config.ini'))
 
         try:
+            self.ua = config['Common']['user-agent']
             self.con_timeout = float(config['CveExplorerNVD']['con_timeout'])
             self.max_cve_count = int(config['CveExplorerNVD']['max_cve_count'])
             self.vuln_db_dir = config['CveExplorerNVD']['vuln_db_dir']
@@ -54,6 +56,16 @@ class CveExplorerNVD:
             self.utility.print_message(FAIL, 'Reading config.ini is failure : {}'.format(e))
             self.utility.write_log(40, 'Reading config.ini is failure : {}'.format(e))
             sys.exit(1)
+
+        # Set HTTP request header.
+        self.http_req_header = {'User-Agent': self.ua,
+                                'Connection': 'keep-alive',
+                                'Accept-Language': 'ja,en-US;q=0.7,en;q=0.3',
+                                'Accept-Encoding': 'gzip, deflate',
+                                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                                'Upgrade-Insecure-Requests': '1',
+                                'Content-Type': 'application/x-www-form-urlencoded',
+                                'Cache-Control': 'no-cache'}
 
         # Create/Get vulnerability data base.
         for idx, col_name in enumerate(self.nvd_db_header):
@@ -172,20 +184,30 @@ class CveExplorerNVD:
         self.utility.print_message(OK, 'Get {} CVE list from {}'.format(cve_year, target_url))
 
         http = None
+        ctx = ssl.create_default_context()
+        # ctx.set_ciphers('DEFAULT')
+        ctx.set_ciphers('DEFAULT@SECLEVEL=1')
         if self.utility.proxy != '':
             self.utility.print_message(WARNING, 'Set proxy server: {}'.format(self.utility.proxy))
             if self.utility.proxy_user != '':
                 headers = urllib3.make_headers(proxy_basic_auth=self.utility.proxy_user + ':' + self.utility.proxy_pass)
                 http = urllib3.ProxyManager(timeout=self.con_timeout,
-                                            headers=self.utility.ua,
+                                            headers=self.http_req_header,
                                             proxy_url=self.utility.proxy,
-                                            proxy_headers=headers)
+                                            proxy_headers=headers,
+                                            ssl_version=ssl.PROTOCOL_TLS,
+                                            ssl_context=ctx)
             else:
                 http = urllib3.ProxyManager(timeout=self.con_timeout,
-                                            headers=self.utility.ua,
-                                            proxy_url=self.utility.proxy)
+                                            headers=self.http_req_header,
+                                            proxy_url=self.utility.proxy,
+                                            ssl_version=ssl.PROTOCOL_TLS,
+                                            ssl_context=ctx)
         else:
-            http = urllib3.PoolManager(timeout=self.con_timeout, headers=self.utility.ua)
+            http = urllib3.PoolManager(timeout=self.con_timeout,
+                                       headers=self.http_req_header,
+                                       ssl_version=ssl.PROTOCOL_TLS,
+                                       ssl_context=ctx)
 
         try:
             with http.request('GET', target_url, preload_content=False) as res, open(tmp_file, 'wb') as fout:
